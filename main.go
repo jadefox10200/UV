@@ -9,7 +9,7 @@ import (
 
 var maxDiff int64 = 300
 var qLenMax = 3
-var timerDuration = 4
+var timerDuration time.Duration = 4
 
 // pin set ups:
 const PinToggle = machine.PinRising | machine.PinFalling
@@ -54,18 +54,18 @@ func main() {
 
 type Queue struct {
 	//list of durations as gotten from the input sensor:
-	Q         *list.List
-	InputOn   chan bool
-	InputOff  chan bool
-	OutputOn  chan bool
-	OutputOff chan bool
-	StopTimerChan chan bool
+	Q                *list.List
+	InputOn          chan bool
+	InputOff         chan bool
+	OutputOn         chan bool
+	OutputOff        chan bool
+	StopTimerChan    chan bool
 	SheetRemovedChan chan bool
-	Kill     chan bool
-	MinMilli int64
-	MaxMilli int64
-	Timer    *time.Timer
-	UserInput chan string
+	Kill             chan bool
+	MinMilli         int64
+	MaxMilli         int64
+	Timer            *time.Timer
+	UserInput        chan string
 }
 
 func (q Queue) StartTimer() {
@@ -77,23 +77,23 @@ func (q Queue) StopTimer() {
 	q.StopTimerChan <- true
 }
 
-//TimerFunc starts a timer and will send to q.Kill a true signal if ever reached.
-//This is intended to be started once a sheet is in the UV tunnel and Q.Len is greater than 1.
+// TimerFunc starts a timer and will send to q.Kill a true signal if ever reached.
+// This is intended to be started once a sheet is in the UV tunnel and Q.Len is greater than 1.
 func (q Queue) TimerFunc() {
-	q.Timer := time.NewTimer(timerDuration * time.Second)
+	q.Timer = time.NewTimer(timerDuration * time.Second)
 	defer q.Timer.Stop()
 	for {
 		select {
-		case <- q.Timer.C:
+		case <-q.Timer.C:
 			fmt.Printf("Timer fired\n")
 			if q.Q.Len() == 0 {
 				fmt.Println("Timer fired even though Q.Len() was 0. Should never happen")
 			}
 			q.Kill <- true
-		case <- q.SheetRemovedChan:
+		case <-q.SheetRemovedChan:
 			q.Timer.Reset(timerDuration)
 			fmt.Printf("Timer reset\n")
-		case <- q.StopTimerChan:
+		case <-q.StopTimerChan:
 			//simply return and the defer will handle stopping
 			return
 		}
@@ -104,15 +104,15 @@ func (q Queue) TimerFunc() {
 func NewQueue() Queue {
 	q := list.New()
 	p := Queue{
-		Q:         q,
-		InputOn:   make(chan bool, 20),
-		InputOff:  make(chan bool, 20),
-		OutputOn:  make(chan bool, 20),
-		OutputOff: make(chan bool, 20),
-		Kill:      make(chan bool, 20),
-		StopTimerChan:     make(chan bool, 20),
+		Q:                q,
+		InputOn:          make(chan bool, 20),
+		InputOff:         make(chan bool, 20),
+		OutputOn:         make(chan bool, 20),
+		OutputOff:        make(chan bool, 20),
+		Kill:             make(chan bool, 20),
+		StopTimerChan:    make(chan bool, 20),
 		SheetRemovedChan: make(chan bool, 20),
-		UserInput: make(chan string),
+		UserInput:        make(chan string),
 	}
 
 	return p
