@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-//TODO: make a toml file for param uploads on board start up. possible?
-
 var maxDiff int64 = 300
 var qLenMax = 3
 var timerDuration = 4
@@ -25,6 +23,35 @@ var currState12 bool
 var lastState13 bool = true
 var currState13 bool
 
+func main() {
+
+	time.Sleep(2 * time.Second)
+	fmt.Println("run init")
+	//set up channels:
+	//a timer must be activated seperately:
+	q := NewQueue()
+	q.MinMilli = 300
+	q.MaxMilli = 3000
+	//simulating sheets entering the UV tunnel:
+	go func() {
+		blinky()
+		initButtons(q)
+	}()
+
+	//set up queue receiver:
+	for {
+		select {
+		case <-q.InputOn:
+			go q.NewSheet()
+		case <-q.OutputOn:
+			go q.RemoveSheet()
+		case <-q.Kill:
+			q.KillFunc()
+		}
+	}
+
+}
+
 type Queue struct {
 	//list of durations as gotten from the input sensor:
 	Q         *list.List
@@ -33,6 +60,7 @@ type Queue struct {
 	OutputOn  chan bool
 	OutputOff chan bool
 	StopTimerChan chan bool
+	SheetRemovedChan chan bool
 	Kill     chan bool
 	MinMilli int64
 	MaxMilli int64
@@ -41,33 +69,37 @@ type Queue struct {
 }
 
 func (q Queue) StartTimer() {
-	q.Timer()
+	q.TimerFunc()
 	return
 }
 
-func (q Queue) EmptyQ() {
-	//empty the Q:
-	qLen := q.Q.Len()
-	if qLen == 0 {
-		return
-	}
-	for i := 0; i < qLen; i++ {
-		el := q.Q.Front()
-		q.Q.Remove(el)
-	}
+func (q Queue) StopTimer() {
+	q.StopTimerChan <- true
 }
 
-// func (q Queue) Reset() {
-// 	//empty the Q:
-// 	qLen := q.Q.Len()
-// 	if qLen == 0 {
-// 		return
-// 	}
-// 	for i := 0; i < qLen; i++ {
-// 		el := q.Q.Front()
-// 		q.Q.Remove(el)
-// 	}
-// }
+//TimerFunc starts a timer and will send to q.Kill a true signal if ever reached.
+//This is intended to be started once a sheet is in the UV tunnel and Q.Len is greater than 1.
+func (q Queue) TimerFunc() {
+	q.Timer := time.NewTimer(timerDuration * time.Second)
+	defer q.Timer.Stop()
+	for {
+		select {
+		case <- q.Timer.C:
+			fmt.Printf("Timer fired\n")
+			if q.Q.Len() == 0 {
+				fmt.Println("Timer fired even though Q.Len() was 0. Should never happen")
+			}
+			q.Kill <- true
+		case <- q.SheetRemovedChan:
+			q.Timer.Reset(timerDuration)
+			fmt.Printf("Timer reset\n")
+		case <- q.StopTimerChan:
+			//simply return and the defer will handle stopping
+			return
+		}
+
+	}
+}
 
 func NewQueue() Queue {
 	q := list.New()
@@ -79,37 +111,11 @@ func NewQueue() Queue {
 		OutputOff: make(chan bool, 20),
 		Kill:      make(chan bool, 20),
 		StopTimerChan:     make(chan bool, 20),
+		SheetRemovedChan: make(chan bool, 20),
 		UserInput: make(chan string),
 	}
 
 	return p
-}
-
-func compare(value *list.Element, reference int64) bool {
-	//type assertion of the interface type list.Element any
-	diff := reference - value.Value.(int64)
-	//if the difference between the two is too great, return that they don't match
-	if diff > maxDiff || diff < -maxDiff {
-		fmt.Printf("Wrong Diff: %v", diff)
-		return false
-	}
-	fmt.Printf("Diff: %v", diff)
-	//return a match
-	return true
-}
-
-func blinky() {
-	fmt.Println("ran blinky")
-	led := machine.LED
-	led.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	led.High()
-	time.Sleep(time.Second * 3)
-	for {
-		led.Low()
-		time.Sleep(time.Millisecond * 350)
-		led.High()
-		time.Sleep(time.Millisecond * 350)
-	}
 }
 
 func (q Queue) NewSheet() {
@@ -127,9 +133,6 @@ func (q Queue) NewSheet() {
 				return
 			}
 
-			//we got a sheet and so should reset the time bomb:
-			// q.Ticker.Reset(time.Second * 3)
-
 			//if the Q is 0, and we are adding a sheet, we need to start a timer to ensure
 			//no sheets get stuck under the tunnel for longer than 4 seconds (or as determined by timerDuration)
 			//when the Q.Len returns to zero, the timer is returned (ie ended) each time so it must be started
@@ -138,6 +141,8 @@ func (q Queue) NewSheet() {
 			if q.Q.Len() == 0 {
 				go q.StartTimer()
 				fmt.Println("Timer started")
+			} else {
+
 			}
 
 			//as the counter was larger than 1, we send the duration onto the queue:
@@ -179,9 +184,6 @@ func (q Queue) RemoveSheet() {
 				return
 			}
 
-			//we got a sheet and so should reset the time bomb:
-			//q.Ticker.Reset(time.Second * 3)
-
 			if q.Q.Len() == 0 {
 				fmt.Printf("nothing in Q but output got a sheet!\n")
 				return
@@ -192,9 +194,13 @@ func (q Queue) RemoveSheet() {
 				fmt.Println("Got the right one")
 				q.Q.Remove(el)
 				fmt.Printf("removed an el. Q Len= %v\n", q.Q.Len())
-				//if the Queue is empty we should stop the timer as nothing is in the tunnel. 
+				//if the Queue is empty we should stop the timer as nothing is in the tunnel.
+				//else the Queue is not empty, we should reset the timer as we did just exit a sheet.
+				//Therefore, nothing is stuck as sheets are exiting as expected
 				if q.Q.Len() == 0 {
 					q.StopTimer()
+				} else {
+					q.SheetRemovedChan <- true
 				}
 			} else {
 				fmt.Println("They didn't match, something wrong!")
@@ -213,95 +219,15 @@ func (q Queue) RemoveSheet() {
 	}
 }
 
-func main() {
-
-	time.Sleep(2 * time.Second)
-	fmt.Println("run init")
-	//set up channels:
-	//a timer must be activated seperately:
-	q := NewQueue()
-	q.MinMilli = 300
-	q.MaxMilli = 3000
-	//simulating sheets entering the UV tunnel:
-	go func() {
-		// for {
-		// 	time.Sleep(time.Second * 1)
-		// 	q.InputOn <- true
-		// 	time.Sleep(time.Second * 3)
-		// 	q.InputOff <- true
-		// 	fmt.Printf("Q len: %v\n", q.Q.Len())
-		// }
-
-		initButtons(q)
-	}()
-
-	go blinky()
-
-	// go func() {
-	// 	time.Sleep(time.Second * 4)
-	// 	for {
-	// 		time.Sleep(time.Second * 1)
-	// 		q.OutputOn <- true
-	// 		time.Sleep(time.Second * 3)
-	// 		q.OutputOff <- true
-	// 	}
-	// }()
-
-	//start the ticker and attach to Q:
-	// ticker := time.NewTicker(time.Second * 3)
-	// defer ticker.Stop()
-
-	// q.Ticker = ticker
-	//set up queue receiver:
-	for {
-		select {
-		case <-q.InputOn:
-			go q.NewSheet()
-		case <-q.OutputOn:
-			go q.RemoveSheet()
-		// case <-q.ResetChan:
-		// go q.Reset()
-		//set a time bomb of 3 seconds so if the Q is greater than 1 and this is called, we kill.
-		// case <-q.Ticker.C:
-		// 	q.LenCheck()
-		case <-q.Kill:
-			q.KillFunc()
-		}
+func (q Queue) EmptyQ() {
+	//empty the Q:
+	qLen := q.Q.Len()
+	if qLen == 0 {
+		return
 	}
-
-}
-
-// func (q Queue) LenCheck() {
-// 	//if this is called, we haven't seen sheets for 3 seconds and need to check if the Q is greater than zero.
-// 	//if it is greater than 0, it means we lost a sheet:
-// 	if q.Q.Len() > 0 {
-// 		fmt.Printf("SHEET STUCK IN TUNNEL, QLEN = %v\n", q.Q.Len())
-// 		q.Kill <- true
-// 	}
-// 	q.Ticker.Reset(time.Second * 3)
-// 	return
-//}
-
-func (q Queue) StopTimer() {
-	q.StopTimerChan <- true
-}
-
-func (q Queue) Timer() {
-	q.Timer := time.NewTimer(timerDuration * time.Second)
-	defer q.Timer.Stop()
-	for {
-		select {
-		case <- q.Timer.C:
-			fmt.Printf("Timer fired\n")
-			q.Kill <- true
-		case <- q.SheetRemovedChan:
-			q.Timer.Reset(timerDuration)
-			fmt.Printf("Timer reset\n")
-		case <- q.StopTimerChan:
-			//simply return and the defer will handle stopping
-			return
-		}
-
+	for i := 0; i < qLen; i++ {
+		el := q.Q.Front()
+		q.Q.Remove(el)
 	}
 }
 
@@ -363,16 +289,6 @@ func initButtons(q Queue) {
 		}
 	})
 
-	//RESET BUTTON
-	// pin12.SetInterrupt(machine.PinRising, func(p machine.Pin) {
-	// 	//when pushed:
-	// 	currState12 = p.Get()
-	// 	if lastState12 != currState12 {
-	// 		lastState12 = p.Get()
-	// 		q.ResetChan <- true
-	// 	}
-	// })
-
 	//BLANK BUTTON
 	pin13.SetInterrupt(PinToggle, func(p machine.Pin) {
 		//when pushed:
@@ -387,4 +303,31 @@ func initButtons(q Queue) {
 		}
 
 	})
+}
+
+func compare(value *list.Element, reference int64) bool {
+	//type assertion of the interface type list.Element any
+	diff := reference - value.Value.(int64)
+	//if the difference between the two is too great, return that they don't match
+	if diff > maxDiff || diff < -maxDiff {
+		fmt.Printf("Wrong Diff: %v", diff)
+		return false
+	}
+	fmt.Printf("Diff: %v", diff)
+	//return a match
+	return true
+}
+
+func blinky() {
+	fmt.Println("ran blinky")
+	led := machine.LED
+	led.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	led.High()
+	time.Sleep(time.Second * 3)
+	for {
+		led.Low()
+		time.Sleep(time.Millisecond * 350)
+		led.High()
+		time.Sleep(time.Millisecond * 350)
+	}
 }
