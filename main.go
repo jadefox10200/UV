@@ -11,6 +11,7 @@ import (
 
 var maxDiff int64 = 300
 var qLenMax = 3
+var timerDuration = 4
 
 // pin set ups:
 const PinToggle = machine.PinRising | machine.PinFalling
@@ -31,12 +32,17 @@ type Queue struct {
 	InputOff  chan bool
 	OutputOn  chan bool
 	OutputOff chan bool
-	// ResetChan chan bool
+	StopTimerChan chan bool
 	Kill     chan bool
 	MinMilli int64
 	MaxMilli int64
-	// Ticker    *time.Ticker
+	Timer    *time.Timer
 	UserInput chan string
+}
+
+func (q Queue) StartTimer() {
+	q.Timer()
+	return
 }
 
 func (q Queue) EmptyQ() {
@@ -72,6 +78,7 @@ func NewQueue() Queue {
 		OutputOn:  make(chan bool, 20),
 		OutputOff: make(chan bool, 20),
 		Kill:      make(chan bool, 20),
+		StopTimerChan:     make(chan bool, 20),
 		UserInput: make(chan string),
 	}
 
@@ -81,7 +88,7 @@ func NewQueue() Queue {
 func compare(value *list.Element, reference int64) bool {
 	//type assertion of the interface type list.Element any
 	diff := reference - value.Value.(int64)
-	//if the difference between the too is too great, return that they don't match
+	//if the difference between the two is too great, return that they don't match
 	if diff > maxDiff || diff < -maxDiff {
 		fmt.Printf("Wrong Diff: %v", diff)
 		return false
@@ -105,7 +112,7 @@ func blinky() {
 	}
 }
 
-func (q Queue) NewProcess() {
+func (q Queue) NewSheet() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	t := time.Now()
@@ -123,6 +130,16 @@ func (q Queue) NewProcess() {
 			//we got a sheet and so should reset the time bomb:
 			// q.Ticker.Reset(time.Second * 3)
 
+			//if the Q is 0, and we are adding a sheet, we need to start a timer to ensure
+			//no sheets get stuck under the tunnel for longer than 4 seconds (or as determined by timerDuration)
+			//when the Q.Len returns to zero, the timer is returned (ie ended) each time so it must be started
+			//again newly each time the Q.Len becomes greater than 0. We ASSUME that since Q.Len is zero, that there
+			//are no other timers running and so must start one.
+			if q.Q.Len() == 0 {
+				go q.StartTimer()
+				fmt.Println("Timer started")
+			}
+
 			//as the counter was larger than 1, we send the duration onto the queue:
 			q.Q.PushFront(diff.Milliseconds())
 			if q.Q.Len() > qLenMax {
@@ -134,7 +151,7 @@ func (q Queue) NewProcess() {
 			return
 		case <-ticker.C:
 			diff := time.Since(t)
-			fmt.Printf("Milliseconds: %v\n", diff.Milliseconds())
+			fmt.Printf("Infeed Milliseconds: %v\n", diff.Milliseconds())
 			if diff.Milliseconds() > q.MaxMilli {
 				fmt.Println("Input sensor covered too long")
 				q.Kill <- true
@@ -145,7 +162,7 @@ func (q Queue) NewProcess() {
 	}
 }
 
-func (q Queue) EndProcess() {
+func (q Queue) RemoveSheet() {
 
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -175,6 +192,10 @@ func (q Queue) EndProcess() {
 				fmt.Println("Got the right one")
 				q.Q.Remove(el)
 				fmt.Printf("removed an el. Q Len= %v\n", q.Q.Len())
+				//if the Queue is empty we should stop the timer as nothing is in the tunnel. 
+				if q.Q.Len() == 0 {
+					q.StopTimer()
+				}
 			} else {
 				fmt.Println("They didn't match, something wrong!")
 				q.Kill <- true
@@ -197,10 +218,10 @@ func main() {
 	time.Sleep(2 * time.Second)
 	fmt.Println("run init")
 	//set up channels:
-	//a ticker must be activated seperately:
+	//a timer must be activated seperately:
 	q := NewQueue()
 	q.MinMilli = 300
-	q.MaxMilli = 4000
+	q.MaxMilli = 3000
 	//simulating sheets entering the UV tunnel:
 	go func() {
 		// for {
@@ -235,9 +256,9 @@ func main() {
 	for {
 		select {
 		case <-q.InputOn:
-			go q.NewProcess()
+			go q.NewSheet()
 		case <-q.OutputOn:
-			go q.EndProcess()
+			go q.RemoveSheet()
 		// case <-q.ResetChan:
 		// go q.Reset()
 		//set a time bomb of 3 seconds so if the Q is greater than 1 and this is called, we kill.
@@ -260,6 +281,29 @@ func main() {
 // 	q.Ticker.Reset(time.Second * 3)
 // 	return
 //}
+
+func (q Queue) StopTimer() {
+	q.StopTimerChan <- true
+}
+
+func (q Queue) Timer() {
+	q.Timer := time.NewTimer(timerDuration * time.Second)
+	defer q.Timer.Stop()
+	for {
+		select {
+		case <- q.Timer.C:
+			fmt.Printf("Timer fired\n")
+			q.Kill <- true
+		case <- q.SheetRemovedChan:
+			q.Timer.Reset(timerDuration)
+			fmt.Printf("Timer reset\n")
+		case <- q.StopTimerChan:
+			//simply return and the defer will handle stopping
+			return
+		}
+
+	}
+}
 
 func (q Queue) KillFunc() {
 
