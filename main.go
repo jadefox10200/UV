@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"fmt"
 	"machine"
+	"runtime/debug"
 	"time"
 )
 
@@ -15,14 +16,23 @@ var qLenMax = 3
 // pin set ups:
 const PinToggle = machine.PinRising | machine.PinFalling
 
-var lastState10 bool = true
-var currState10 bool
-var lastState11 bool = true
-var currState11 bool
-var lastState12 bool = true
-var currState12 bool
-var lastState13 bool = true
-var currState13 bool
+var lastState10p bool = true
+var currState10p bool = false
+var lastState11p bool = true
+var currState11p bool = false
+var lastState12p bool = true
+var currState12p bool = false
+var lastState13p bool = true
+var currState13p bool = false
+
+var lastState10 *bool = &lastState10p
+var currState10 *bool = &currState10p
+var lastState11 *bool = &lastState11p
+var currState11 *bool = &currState11p
+var lastState12 *bool = &lastState12p
+var currState12 *bool = &currState12p
+var lastState13 *bool = &lastState13p
+var currState13 *bool = &currState13p
 
 type Queue struct {
 	//list of durations as gotten from the input sensor:
@@ -50,18 +60,6 @@ func (q Queue) EmptyQ() {
 		q.Q.Remove(el)
 	}
 }
-
-// func (q Queue) Reset() {
-// 	//empty the Q:
-// 	qLen := q.Q.Len()
-// 	if qLen == 0 {
-// 		return
-// 	}
-// 	for i := 0; i < qLen; i++ {
-// 		el := q.Q.Front()
-// 		q.Q.Remove(el)
-// 	}
-// }
 
 func NewQueue() Queue {
 	q := list.New()
@@ -117,6 +115,7 @@ func (q Queue) NewProcess() {
 			diff := time.Since(t)
 			if diff.Milliseconds() < q.MinMilli {
 				fmt.Println("saw something small")
+				debug.FreeOSMemory()
 				return
 			}
 
@@ -159,6 +158,7 @@ func (q Queue) EndProcess() {
 			//if the counter is too small we assume we didn't see a sheet:
 			if diff.Milliseconds() < q.MinMilli {
 				fmt.Printf("Saw something small on output\n")
+				debug.FreeOSMemory()
 				return
 			}
 
@@ -194,8 +194,10 @@ func (q Queue) EndProcess() {
 
 func main() {
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(5 * time.Second)
 	fmt.Println("run init")
+
+	fmt.Println("states assigned")
 	//set up channels:
 	//a ticker must be activated seperately:
 	q := NewQueue()
@@ -289,9 +291,9 @@ func initButtons(q Queue) {
 	pin10.SetInterrupt(PinToggle, func(p machine.Pin) {
 		//when pushed:
 		//debounce to ensure noise doesn't activate.
-		currState10 = p.Get()
-		if lastState10 != currState10 {
-			lastState10 = p.Get()
+		*currState10 = p.Get()
+		if *lastState10 != *currState10 {
+			*lastState10 = p.Get()
 			if p.Get() == false {
 				fmt.Printf("pushed inputon\n")
 				q.InputOn <- true
@@ -300,15 +302,14 @@ func initButtons(q Queue) {
 				q.InputOff <- true
 			}
 		}
-
 	})
 
 	//OUTFEED SENSOR
 	pin11.SetInterrupt(PinToggle, func(p machine.Pin) {
 		//when pushed:
-		currState11 = p.Get()
-		if lastState11 != currState11 {
-			lastState11 = p.Get()
+		*currState11 = p.Get()
+		if *lastState11 != *currState11 {
+			*lastState11 = p.Get()
 			if p.Get() == false {
 				fmt.Printf("pushed output\n")
 				q.OutputOn <- true
@@ -332,9 +333,9 @@ func initButtons(q Queue) {
 	//BLANK BUTTON
 	pin13.SetInterrupt(PinToggle, func(p machine.Pin) {
 		//when pushed:
-		currState13 = p.Get()
-		if lastState13 != currState13 {
-			lastState13 = p.Get()
+		*currState13 = p.Get()
+		if *lastState13 != *currState13 {
+			*lastState13 = p.Get()
 			if p.Get() == false {
 				fmt.Printf("pushed 13\n")
 			} else {
