@@ -244,6 +244,7 @@ func (q Queue) KillFunc() {
 }
 
 func initButtons(q Queue) {
+
 	//10 - 13
 	pin10 := machine.GPIO12
 	pin11 := machine.GPIO13
@@ -259,9 +260,9 @@ func initButtons(q Queue) {
 	pin10.SetInterrupt(PinToggle, func(p machine.Pin) {
 		//when pushed:
 		//debounce to ensure noise doesn't activate.
-		currState12 = p.Get()
-		if lastState12 != currState12 {
-			lastState12 = p.Get()
+		currState10 = p.Get()
+		if lastState10 != currState10 {
+			lastState10 = p.Get()
 			if p.Get() == false {
 				fmt.Printf("pushed inputon\n")
 				q.InputOn <- true
@@ -274,11 +275,11 @@ func initButtons(q Queue) {
 	})
 
 	//OUTFEED SENSOR
-	pin13.SetInterrupt(PinToggle, func(p machine.Pin) {
+	pin11.SetInterrupt(PinToggle, func(p machine.Pin) {
 		//when pushed:
-		currState13 = p.Get()
-		if lastState13 != currState13 {
-			lastState13 = p.Get()
+		currState11 = p.Get()
+		if lastState11 != currState11 {
+			lastState11 = p.Get()
 			if p.Get() == false {
 				fmt.Printf("pushed output\n")
 				q.OutputOn <- true
@@ -289,20 +290,6 @@ func initButtons(q Queue) {
 		}
 	})
 
-	//BLANK BUTTON
-	// pin13.SetInterrupt(PinToggle, func(p machine.Pin) {
-	// 	//when pushed:
-	// 	currState13 = p.Get()
-	// 	if lastState13 != currState13 {
-	// 		lastState13 = p.Get()
-	// 		if p.Get() == false {
-	// 			fmt.Printf("pushed 13\n")
-	// 		} else {
-	// 			fmt.Printf("released 13\n")
-	// 		}
-	// 	}
-	//
-	// })
 }
 
 func compare(value *list.Element, reference int64) bool {
