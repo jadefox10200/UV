@@ -13,14 +13,23 @@ var qLenMax = 3
 // pin set ups:
 const PinToggle = machine.PinRising | machine.PinFalling
 
-var lastState10 bool = true
-var currState10 bool
-var lastState11 bool = true
-var currState11 bool
-var lastState12 bool = true
-var currState12 bool
-var lastState13 bool = true
-var currState13 bool
+var lastState10p bool = true
+var currState10p bool = false
+var lastState11p bool = true
+var currState11p bool = false
+var lastState12p bool = true
+var currState12p bool = false
+var lastState13p bool = true
+var currState13p bool = false
+
+var lastState10 *bool = &lastState10p
+var currState10 *bool = &currState10p
+var lastState11 *bool = &lastState11p
+var currState11 *bool = &currState11p
+var lastState12 *bool = &lastState12p
+var currState12 *bool = &currState12p
+var lastState13 *bool = &lastState13p
+var currState13 *bool = &currState13p
 
 type Queue struct {
 	//list of durations as gotten from the input sensor:
@@ -94,17 +103,21 @@ func blinky() {
 func InfeedSensor(q *Queue) {
 
 	ticker := time.NewTicker(time.Second)
+	var currTime time.Time
+	var t *time.Time = &currTime
+	var diffTime time.Duration
+	var diff *time.Duration = &diffTime
 wait:
 	for {
 		//wait for the sensor to turn on:
 		<-q.InputOn
-		t := time.Now()
+		*t = time.Now()
 		for {
 			select {
 			case <-q.InputOff:
 				//if the counter is too small we assume we didn't see a sheet:
-				diff := time.Since(t)
-				t = time.Now()
+				*diff = time.Since(*t)
+				*t = time.Now()
 				if diff.Milliseconds() > q.MinMilli {
 					//as the counter was larger than 1, we send the duration onto the queue:
 					q.Q.PushFront(diff.Milliseconds())
@@ -119,7 +132,7 @@ wait:
 				}
 				continue wait
 			case <-ticker.C:
-				diff := time.Since(t)
+				*diff = time.Since(*t)
 				// println("Milliseconds: ", diff.Milliseconds())
 				if diff.Milliseconds() > q.MaxMilli {
 					println("Input sensor covered too long")
@@ -133,22 +146,22 @@ wait:
 
 func OutfeedSensor(q *Queue) {
 
-	// var currTime time.Time
-	var t time.Time
-	// var diffTime time.Duration
-	var diff time.Duration
+	var currTime time.Time
+	var t *time.Time = &currTime
+	var diffTime time.Duration
+	var diff *time.Duration = &diffTime
 wait:
 	for {
 		//wait for the sensor to turn on:
 		<-q.OutputOn
 		ticker := time.NewTicker(time.Second)
 		//once on, capture the time:
-		t = time.Now()
+		*t = time.Now()
 		for {
 			select {
 			//sensor turns off, stop the ticker, check the length, add to Q:
 			case <-q.OutputOff:
-				diff = time.Since(t)
+				*diff = time.Since(*t)
 				//if the counter is too small we assume we didn't see a sheet:
 				if diff.Milliseconds() > q.MinMilli {
 					if q.Q.Len() == 0 {
@@ -170,7 +183,7 @@ wait:
 				}
 				continue wait
 			case <-ticker.C:
-				diff = time.Since(t)
+				*diff = time.Since(*t)
 				// println("Milliseconds: ", diff.Milliseconds())
 				if diff.Milliseconds() > q.MaxMilli {
 					q.Kill <- true
@@ -203,13 +216,16 @@ func main() {
 
 	//set up queue receiver:
 	//now only used for periodic memStats and the KillFunc()
+	//check to see if the heap is larger than 1000000 and if so, force a GC just in case.
+	//with the optimizations, this shouldn't be needed as much.
 	for {
 		select {
 		case <-ticker.C:
-			// runtime.GC()
 			runtime.ReadMemStats(stats)
 			println("Heap in use: ", stats.HeapInuse)
-			// println("input len:", len(q.InputOn))
+			if stats.HeapInuse > 100000 {
+				runtime.GC()
+			}
 		case <-q.Kill:
 			q.KillFunc()
 		}
@@ -243,9 +259,9 @@ func initPins(q Queue) {
 	pin10.SetInterrupt(PinToggle, func(p machine.Pin) {
 		//when pushed:
 		//debounce to ensure noise doesn't activate.
-		currState10 = p.Get()
-		if lastState10 != currState10 {
-			lastState10 = p.Get()
+		*currState10 = p.Get()
+		if *lastState10 != *currState10 {
+			*lastState10 = p.Get()
 			if p.Get() == false {
 				q.InputOn <- true
 			} else {
@@ -257,9 +273,9 @@ func initPins(q Queue) {
 	//OUTFEED SENSOR
 	pin11.SetInterrupt(PinToggle, func(p machine.Pin) {
 		//when pushed:
-		currState11 = p.Get()
-		if lastState11 != currState11 {
-			lastState11 = p.Get()
+		*currState11 = p.Get()
+		if *lastState11 != *currState11 {
+			*lastState11 = p.Get()
 			if p.Get() == false {
 				q.OutputOn <- true
 			} else {
