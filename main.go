@@ -2,7 +2,6 @@ package main
 
 import (
 	"container/list"
-	"fmt"
 	"machine"
 	"runtime"
 	"time"
@@ -79,16 +78,16 @@ func compare(value *list.Element, reference int64) bool {
 	diff := reference - value.Value.(int64)
 	//if the difference between the two is too great, return that they don't match
 	if diff > maxDiff || diff < -maxDiff {
-		fmt.Printf("Wrong Diff: %v", diff)
+		println("Wrong Diff: ", diff)
 		return false
 	}
-	fmt.Printf("Diff: %v", diff)
+	println("Diff: ", diff)
 	//return a match
 	return true
 }
 
 func blinky() {
-	fmt.Println("ran blinky")
+	println("ran blinky")
 	led := machine.LED
 	led.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	led.High()
@@ -113,7 +112,7 @@ func (q Queue) InfeedSensor() {
 			//if the counter is too small we assume we didn't see a sheet:
 			diff := time.Since(t)
 			if diff.Milliseconds() < q.MinMilli {
-				fmt.Println("saw something small")
+				println("saw something small")
 				ticker.Stop()
 				continue
 			}
@@ -121,17 +120,17 @@ func (q Queue) InfeedSensor() {
 			//as the counter was larger than 1, we send the duration onto the queue:
 			q.Q.PushFront(diff.Milliseconds())
 			if q.Q.Len() > qLenMax {
-				fmt.Println("Max number %v sheets exceeded.\n", qLenMax)
+				println("Max number %v sheets exceeded.\n", qLenMax)
 				q.Kill <- true
 				return
 			}
-			fmt.Printf("added dur: %v; Q-len: %v\n", diff.Milliseconds(), q.Q.Len())
+			printf("added dur: %v; Q-len: %v\n", diff.Milliseconds(), q.Q.Len())
 			ticker.Stop()
 		case <-ticker.C:
 			diff := time.Since(t)
-			fmt.Printf("Milliseconds: %v\n", diff.Milliseconds())
+			printf("Milliseconds: %v\n", diff.Milliseconds())
 			if diff.Milliseconds() > q.MaxMilli {
-				fmt.Println("Input sensor covered too long")
+				println("Input sensor covered too long")
 				q.Kill <- true
 				return
 			}
@@ -139,7 +138,7 @@ func (q Queue) InfeedSensor() {
 	}
 }
 
-func (q Queue) OutFeedSensor() {
+func (q Queue) OutfeedSensor() {
 
 	for {
 		//wait for the sensor to turn on:
@@ -154,11 +153,11 @@ func (q Queue) OutFeedSensor() {
 			diff := time.Since(t)
 			//if the counter is too small we assume we didn't see a sheet:
 			if diff.Milliseconds() < q.MinMilli {
-				fmt.Printf("Saw something small on output\n")
+				printf("Saw something small on output\n")
 				continue
 			}
 			if q.Q.Len() == 0 {
-				fmt.Printf("nothing in Q but output got a sheet!\n")
+				printf("nothing in Q but output got a sheet!\n")
 				continue
 			}
 
@@ -167,14 +166,14 @@ func (q Queue) OutFeedSensor() {
 			if compare(el, diff.Milliseconds()) {
 				println("Got the right one")
 				q.Q.Remove(el)
-				fmt.Printf("removed an el. Q Len= %v\n", q.Q.Len())
+				printf("removed an el. Q Len= %v\n", q.Q.Len())
 			} else {
 				println("They didn't match, something wrong!")
 				q.Kill <- true
 			}
 		case <-ticker.C:
 			diff := time.Since(t)
-			fmt.Printf("Milliseconds: %v\n", diff.Milliseconds())
+			printf("Milliseconds: %v\n", diff.Milliseconds())
 			if diff.Milliseconds() > q.MaxMilli {
 				q.Kill <- true
 				return
@@ -188,7 +187,7 @@ func (q Queue) OutFeedSensor() {
 func main() {
 
 	time.Sleep(5 * time.Second)
-	fmt.Println("run init")
+	println("run init")
 	//set up channels:
 	//a ticker must be activated seperately:
 	q := NewQueue()
@@ -198,14 +197,14 @@ func main() {
 	//set up for the sensors:
 	go func() {
 
-		initPins(q)
-		q.InfeedSensor()
-		q.OutfeedSensor()
+		// initPins(q)
+		// q.InfeedSensor()
+		// q.OutfeedSensor()
 	}()
 
 	go blinky()
 
-	//start the ticker for memStats:
+	// start the ticker for memStats:
 	stats := &runtime.MemStats{}
 	ticker := time.NewTicker(time.Second * 5)
 	defer ticker.Stop()
@@ -216,9 +215,9 @@ func main() {
 		select {
 		case <-ticker.C:
 			runtime.ReadMemStats(stats)
-			fmt.Printf("Heap in use: %v\n", stats.HeapInuse)
-		case <-q.Kill:
-			q.KillFunc()
+			println("Heap in use: %v\n", stats.HeapInuse)
+			// case <-q.Kill:
+			// q.KillFunc()
 		}
 	}
 
@@ -226,7 +225,7 @@ func main() {
 
 func (q Queue) KillFunc() {
 
-	fmt.Println("KILL ACTIVE.")
+	println("KILL ACTIVE.")
 	panic("KILL ME")
 	// q.EmptyQ()
 	//send kill signals
@@ -254,10 +253,8 @@ func initPins(q Queue) {
 		if *lastState10 != *currState10 {
 			*lastState10 = p.Get()
 			if p.Get() == false {
-				// fmt.Printf("pushed inputon\n")
 				q.InputOn <- true
 			} else {
-				// fmt.Printf("released inputon\n")
 				q.InputOff <- true
 			}
 		}
@@ -270,10 +267,8 @@ func initPins(q Queue) {
 		if *lastState11 != *currState11 {
 			*lastState11 = p.Get()
 			if p.Get() == false {
-				// fmt.Printf("pushed output\n")
 				q.OutputOn <- true
 			} else {
-				// fmt.Printf("output released\n")
 				q.OutputOff <- true
 			}
 		}
