@@ -124,11 +124,11 @@ func (q Queue) InfeedSensor() {
 				q.Kill <- true
 				return
 			}
-			printf("added dur: %v; Q-len: %v\n", diff.Milliseconds(), q.Q.Len())
+			println("added dur: %v; Q-len: %v\n", diff.Milliseconds(), q.Q.Len())
 			ticker.Stop()
 		case <-ticker.C:
 			diff := time.Since(t)
-			printf("Milliseconds: %v\n", diff.Milliseconds())
+			println("Milliseconds: %v\n", diff.Milliseconds())
 			if diff.Milliseconds() > q.MaxMilli {
 				println("Input sensor covered too long")
 				q.Kill <- true
@@ -153,11 +153,11 @@ func (q Queue) OutfeedSensor() {
 			diff := time.Since(t)
 			//if the counter is too small we assume we didn't see a sheet:
 			if diff.Milliseconds() < q.MinMilli {
-				printf("Saw something small on output\n")
+				println("Saw something small on output\n")
 				continue
 			}
 			if q.Q.Len() == 0 {
-				printf("nothing in Q but output got a sheet!\n")
+				println("nothing in Q but output got a sheet!\n")
 				continue
 			}
 
@@ -166,21 +166,19 @@ func (q Queue) OutfeedSensor() {
 			if compare(el, diff.Milliseconds()) {
 				println("Got the right one")
 				q.Q.Remove(el)
-				printf("removed an el. Q Len= %v\n", q.Q.Len())
+				println("removed an el. Q Len= %v\n", q.Q.Len())
 			} else {
 				println("They didn't match, something wrong!")
 				q.Kill <- true
 			}
 		case <-ticker.C:
 			diff := time.Since(t)
-			printf("Milliseconds: %v\n", diff.Milliseconds())
+			println("Milliseconds: %v\n", diff.Milliseconds())
 			if diff.Milliseconds() > q.MaxMilli {
 				q.Kill <- true
 				return
 			}
-
 		}
-
 	}
 }
 
@@ -188,6 +186,7 @@ func main() {
 
 	time.Sleep(5 * time.Second)
 	println("run init")
+	// debug.SetMemoryLimit(150000)
 	//set up channels:
 	//a ticker must be activated seperately:
 	q := NewQueue()
@@ -196,17 +195,16 @@ func main() {
 
 	//set up for the sensors:
 	go func() {
-
-		// initPins(q)
-		// q.InfeedSensor()
-		// q.OutfeedSensor()
+		initPins(q)
+		q.InfeedSensor()
+		q.OutfeedSensor()
 	}()
 
 	go blinky()
 
 	// start the ticker for memStats:
 	stats := &runtime.MemStats{}
-	ticker := time.NewTicker(time.Second * 5)
+	ticker := time.NewTicker(time.Second * 1)
 	defer ticker.Stop()
 
 	//set up queue receiver:
@@ -215,9 +213,10 @@ func main() {
 		select {
 		case <-ticker.C:
 			runtime.ReadMemStats(stats)
-			println("Heap in use: %v\n", stats.HeapInuse)
-			// case <-q.Kill:
-			// q.KillFunc()
+			println("Heap in use: ", stats.HeapInuse)
+			// println("input len:", len(q.InputOn))
+		case <-q.Kill:
+			q.KillFunc()
 		}
 	}
 
