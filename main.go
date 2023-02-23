@@ -13,23 +13,14 @@ var qLenMax = 3
 // pin set ups:
 const PinToggle = machine.PinRising | machine.PinFalling
 
-var lastState10p bool = true
-var currState10p bool = false
-var lastState11p bool = true
-var currState11p bool = false
-var lastState12p bool = true
-var currState12p bool = false
-var lastState13p bool = true
-var currState13p bool = false
-
-var lastState10 *bool = &lastState10p
-var currState10 *bool = &currState10p
-var lastState11 *bool = &lastState11p
-var currState11 *bool = &currState11p
-var lastState12 *bool = &lastState12p
-var currState12 *bool = &currState12p
-var lastState13 *bool = &lastState13p
-var currState13 *bool = &currState13p
+var lastState10 bool = true
+var currState10 bool
+var lastState11 bool = true
+var currState11 bool
+var lastState12 bool = true
+var currState12 bool
+var lastState13 bool = true
+var currState13 bool
 
 type Queue struct {
 	//list of durations as gotten from the input sensor:
@@ -100,83 +91,90 @@ func blinky() {
 	}
 }
 
-func (q Queue) InfeedSensor() {
+func InfeedSensor(q *Queue) {
 
+	ticker := time.NewTicker(time.Second)
+wait:
 	for {
 		//wait for the sensor to turn on:
 		<-q.InputOn
 		t := time.Now()
-		ticker := time.NewTicker(time.Second)
-		select {
-		case <-q.InputOff:
-			//if the counter is too small we assume we didn't see a sheet:
-			diff := time.Since(t)
-			if diff.Milliseconds() < q.MinMilli {
-				println("saw something small")
-				ticker.Stop()
-				continue
-			}
-
-			//as the counter was larger than 1, we send the duration onto the queue:
-			q.Q.PushFront(diff.Milliseconds())
-			if q.Q.Len() > qLenMax {
-				println("Max number %v sheets exceeded.\n", qLenMax)
-				q.Kill <- true
-				return
-			}
-			println("added dur: %v; Q-len: %v\n", diff.Milliseconds(), q.Q.Len())
-			ticker.Stop()
-		case <-ticker.C:
-			diff := time.Since(t)
-			println("Milliseconds: %v\n", diff.Milliseconds())
-			if diff.Milliseconds() > q.MaxMilli {
-				println("Input sensor covered too long")
-				q.Kill <- true
-				return
+		for {
+			select {
+			case <-q.InputOff:
+				//if the counter is too small we assume we didn't see a sheet:
+				diff := time.Since(t)
+				t = time.Now()
+				if diff.Milliseconds() > q.MinMilli {
+					//as the counter was larger than 1, we send the duration onto the queue:
+					q.Q.PushFront(diff.Milliseconds())
+					if q.Q.Len() > qLenMax {
+						println("Max number sheets exceeded.", qLenMax)
+						q.Kill <- true
+						return
+					}
+					println("added dur & Q-len: ", diff.Milliseconds(), q.Q.Len())
+				} else {
+					println("saw something small on infeed")
+				}
+				continue wait
+			case <-ticker.C:
+				diff := time.Since(t)
+				// println("Milliseconds: ", diff.Milliseconds())
+				if diff.Milliseconds() > q.MaxMilli {
+					println("Input sensor covered too long")
+					q.Kill <- true
+					return
+				}
 			}
 		}
 	}
 }
 
-func (q Queue) OutfeedSensor() {
+func OutfeedSensor(q *Queue) {
 
+	// var currTime time.Time
+	var t time.Time
+	// var diffTime time.Duration
+	var diff time.Duration
+wait:
 	for {
 		//wait for the sensor to turn on:
 		<-q.OutputOn
-		//once on, capture the time and start a ticker:
-		t := time.Now()
 		ticker := time.NewTicker(time.Second)
-		select {
-		//sensor turns off, stop the ticker, check the length, add to Q:
-		case <-q.OutputOff:
-			ticker.Stop()
-			diff := time.Since(t)
-			//if the counter is too small we assume we didn't see a sheet:
-			if diff.Milliseconds() < q.MinMilli {
-				println("Saw something small on output\n")
-				continue
-			}
-			if q.Q.Len() == 0 {
-				println("nothing in Q but output got a sheet!\n")
-				continue
-			}
-
-			//get the first element from the queue:
-			el := q.Q.Front()
-			if compare(el, diff.Milliseconds()) {
-				println("Got the right one")
-				q.Q.Remove(el)
-				println("removed an el. Q Len= %v\n", q.Q.Len())
-			} else {
-				println("They didn't match, something wrong!")
-				q.Kill <- true
-			}
-		case <-ticker.C:
-			diff := time.Since(t)
-			println("Milliseconds: %v\n", diff.Milliseconds())
-			if diff.Milliseconds() > q.MaxMilli {
-				q.Kill <- true
-				return
+		//once on, capture the time:
+		t = time.Now()
+		for {
+			select {
+			//sensor turns off, stop the ticker, check the length, add to Q:
+			case <-q.OutputOff:
+				diff = time.Since(t)
+				//if the counter is too small we assume we didn't see a sheet:
+				if diff.Milliseconds() > q.MinMilli {
+					if q.Q.Len() == 0 {
+						println("nothing in Q but output got a sheet!")
+						continue wait
+					}
+					//get the first element from the queue:
+					el := q.Q.Front()
+					if compare(el, diff.Milliseconds()) {
+						// println("Got the right one")
+						q.Q.Remove(el)
+						println("removed an el. Q Len=", q.Q.Len())
+					} else {
+						println("They didn't match, something wrong!")
+						q.Kill <- true
+					}
+				} else {
+					println("Saw something small on output")
+				}
+				continue wait
+			case <-ticker.C:
+				diff = time.Since(t)
+				// println("Milliseconds: ", diff.Milliseconds())
+				if diff.Milliseconds() > q.MaxMilli {
+					q.Kill <- true
+				}
 			}
 		}
 	}
@@ -186,7 +184,6 @@ func main() {
 
 	time.Sleep(5 * time.Second)
 	println("run init")
-	// debug.SetMemoryLimit(150000)
 	//set up channels:
 	//a ticker must be activated seperately:
 	q := NewQueue()
@@ -194,17 +191,14 @@ func main() {
 	q.MaxMilli = 4000
 
 	//set up for the sensors:
-	go func() {
-		initPins(q)
-		q.InfeedSensor()
-		q.OutfeedSensor()
-	}()
-
+	go initPins(q)
+	go InfeedSensor(&q)
+	go OutfeedSensor(&q)
 	go blinky()
 
 	// start the ticker for memStats:
 	stats := &runtime.MemStats{}
-	ticker := time.NewTicker(time.Second * 1)
+	ticker := time.NewTicker(time.Second * 5)
 	defer ticker.Stop()
 
 	//set up queue receiver:
@@ -212,6 +206,7 @@ func main() {
 	for {
 		select {
 		case <-ticker.C:
+			// runtime.GC()
 			runtime.ReadMemStats(stats)
 			println("Heap in use: ", stats.HeapInuse)
 			// println("input len:", len(q.InputOn))
@@ -248,9 +243,9 @@ func initPins(q Queue) {
 	pin10.SetInterrupt(PinToggle, func(p machine.Pin) {
 		//when pushed:
 		//debounce to ensure noise doesn't activate.
-		*currState10 = p.Get()
-		if *lastState10 != *currState10 {
-			*lastState10 = p.Get()
+		currState10 = p.Get()
+		if lastState10 != currState10 {
+			lastState10 = p.Get()
 			if p.Get() == false {
 				q.InputOn <- true
 			} else {
@@ -262,9 +257,9 @@ func initPins(q Queue) {
 	//OUTFEED SENSOR
 	pin11.SetInterrupt(PinToggle, func(p machine.Pin) {
 		//when pushed:
-		*currState11 = p.Get()
-		if *lastState11 != *currState11 {
-			*lastState11 = p.Get()
+		currState11 = p.Get()
+		if lastState11 != currState11 {
+			lastState11 = p.Get()
 			if p.Get() == false {
 				q.OutputOn <- true
 			} else {
