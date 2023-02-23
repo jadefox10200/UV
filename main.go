@@ -9,6 +9,7 @@ import (
 
 var maxDiff int64 = 300
 var qLenMax = 3
+var timerDuration time.Duration = 4
 
 // pin set ups:
 const PinToggle = machine.PinRising | machine.PinFalling
@@ -33,71 +34,67 @@ var currState13 *bool = &currState13p
 
 type Queue struct {
 	//list of durations as gotten from the input sensor:
-	Q         *list.List
-	InputOn   chan bool
-	InputOff  chan bool
-	OutputOn  chan bool
-	OutputOff chan bool
-	// ResetChan chan bool
-	Kill     chan bool
-	MinMilli int64
-	MaxMilli int64
-	// Ticker    *time.Ticker
-	UserInput chan string
+	Q                *list.List
+	InputOn          chan bool
+	InputOff         chan bool
+	OutputOn         chan bool
+	OutputOff        chan bool
+	StopTimerChan    chan bool
+	SheetRemovedChan chan bool
+	Kill             chan bool
+	MinMilli         int64
+	MaxMilli         int64
+	Timer            *time.Timer
+	UserInput        chan string
 }
 
-func (q Queue) EmptyQ() {
-	//empty the Q:
-	qLen := q.Q.Len()
-	if qLen == 0 {
-		return
-	}
-	for i := 0; i < qLen; i++ {
-		el := q.Q.Front()
-		q.Q.Remove(el)
+func (q Queue) StartTimer() {
+	q.TimerFunc()
+	return
+}
+
+func (q Queue) StopTimer() {
+	q.StopTimerChan <- true
+}
+
+// TimerFunc starts a timer and will send to q.Kill a true signal if ever reached.
+// This is intended to be started once a sheet is in the UV tunnel and Q.Len is greater than 1.
+func (q Queue) TimerFunc() {
+	q.Timer = time.NewTimer(timerDuration * time.Second)
+	defer q.Timer.Stop()
+	for {
+		select {
+		case <-q.Timer.C:
+			println("Timer fired\n")
+			if q.Q.Len() == 0 {
+				println("Timer fired even though Q.Len() was 0. Should never happen")
+			}
+			q.Kill <- true
+		case <-q.SheetRemovedChan:
+			q.Timer.Reset(timerDuration * time.Second)
+			println("Timer reset")
+		case <-q.StopTimerChan:
+			//simply return and the defer will handle stopping
+			return
+		}
 	}
 }
 
 func NewQueue() Queue {
 	q := list.New()
 	p := Queue{
-		Q:         q,
-		InputOn:   make(chan bool, 20),
-		InputOff:  make(chan bool, 20),
-		OutputOn:  make(chan bool, 20),
-		OutputOff: make(chan bool, 20),
-		Kill:      make(chan bool, 20),
-		UserInput: make(chan string),
+		Q:                q,
+		InputOn:          make(chan bool, 20),
+		InputOff:         make(chan bool, 20),
+		OutputOn:         make(chan bool, 20),
+		OutputOff:        make(chan bool, 20),
+		Kill:             make(chan bool, 20),
+		StopTimerChan:    make(chan bool, 20),
+		SheetRemovedChan: make(chan bool, 20),
+		UserInput:        make(chan string),
 	}
 
 	return p
-}
-
-func compare(value *list.Element, reference int64) bool {
-	//type assertion of the interface type list.Element any
-	diff := reference - value.Value.(int64)
-	//if the difference between the two is too great, return that they don't match
-	if diff > maxDiff || diff < -maxDiff {
-		println("Wrong Diff: ", diff)
-		return false
-	}
-	println("Diff: ", diff)
-	//return a match
-	return true
-}
-
-func blinky() {
-	println("ran blinky")
-	led := machine.LED
-	led.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	led.High()
-	time.Sleep(time.Second * 3)
-	for {
-		led.Low()
-		time.Sleep(time.Millisecond * 350)
-		led.High()
-		time.Sleep(time.Millisecond * 350)
-	}
 }
 
 func InfeedSensor(q *Queue) {
@@ -119,12 +116,21 @@ wait:
 				*diff = time.Since(*t)
 				*t = time.Now()
 				if diff.Milliseconds() > q.MinMilli {
+					//if the Q is 0, and we are adding a sheet, we need to start a timer to ensure
+					//no sheets get stuck under the tunnel for longer than 4 seconds (or as determined by timerDuration)
+					//when the Q.Len returns to zero, the timer is returned (ie ended) each time so it must be started
+					//again newly each time the Q.Len becomes greater than 0. We ASSUME that since Q.Len is zero, that there
+					//are no other timers running and so must start one.
+					if q.Q.Len() == 0 {
+						go q.StartTimer()
+						println("Timer started")
+					}
+
 					//as the counter was larger than 1, we send the duration onto the queue:
 					q.Q.PushFront(diff.Milliseconds())
 					if q.Q.Len() > qLenMax {
-						println("Max number sheets exceeded.", qLenMax)
+						println("Max number %v sheets exceeded.", qLenMax)
 						q.Kill <- true
-						return
 					}
 					println("added dur & Q-len: ", diff.Milliseconds(), q.Q.Len())
 				} else {
@@ -146,6 +152,7 @@ wait:
 
 func OutfeedSensor(q *Queue) {
 
+	ticker := time.NewTicker(time.Second)
 	var currTime time.Time
 	var t *time.Time = &currTime
 	var diffTime time.Duration
@@ -154,15 +161,14 @@ wait:
 	for {
 		//wait for the sensor to turn on:
 		<-q.OutputOn
-		ticker := time.NewTicker(time.Second)
 		//once on, capture the time:
 		*t = time.Now()
 		for {
 			select {
-			//sensor turns off, stop the ticker, check the length, add to Q:
+			//sensor turns off, check the length, add to Q:
 			case <-q.OutputOff:
 				*diff = time.Since(*t)
-				//if the counter is too small we assume we didn't see a sheet:
+				//check that the counter was big enough for a sheet:
 				if diff.Milliseconds() > q.MinMilli {
 					if q.Q.Len() == 0 {
 						println("nothing in Q but output got a sheet!")
@@ -171,22 +177,30 @@ wait:
 					//get the first element from the queue:
 					el := q.Q.Front()
 					if compare(el, diff.Milliseconds()) {
-						// println("Got the right one")
+						println("Got the right one")
 						q.Q.Remove(el)
-						println("removed an el. Q Len=", q.Q.Len())
+						println("removed an el. Q Len= ", q.Q.Len())
+						//if the Queue is empty we should stop the timer as nothing is in the tunnel.
+						//else the Queue is not empty, we should reset the timer as we did just exit a sheet.
+						//Therefore, nothing is stuck as sheets are exiting as expected
+						if q.Q.Len() == 0 {
+							q.StopTimer()
+						} else {
+							q.SheetRemovedChan <- true
+						}
 					} else {
 						println("They didn't match, something wrong!")
 						q.Kill <- true
 					}
 				} else {
-					println("Saw something small on output")
+					println("saw something small on outfeed")
 				}
 				continue wait
 			case <-ticker.C:
 				*diff = time.Since(*t)
-				// println("Milliseconds: ", diff.Milliseconds())
 				if diff.Milliseconds() > q.MaxMilli {
 					q.Kill <- true
+					return
 				}
 			}
 		}
@@ -230,8 +244,19 @@ func main() {
 			q.KillFunc()
 		}
 	}
-
 }
+
+// func (q Queue) EmptyQ() {
+// 	//empty the Q:
+// 	qLen := q.Q.Len()
+// 	if qLen == 0 {
+// 		return
+// 	}
+// 	for i := 0; i < qLen; i++ {
+// 		el := q.Q.Front()
+// 		q.Q.Remove(el)
+// 	}
+// }
 
 func (q Queue) KillFunc() {
 
@@ -244,6 +269,7 @@ func (q Queue) KillFunc() {
 }
 
 func initPins(q Queue) {
+
 	//10 - 13
 	pin10 := machine.GPIO12
 	pin11 := machine.GPIO13
@@ -283,5 +309,31 @@ func initPins(q Queue) {
 			}
 		}
 	})
+}
 
+func compare(value *list.Element, reference int64) bool {
+	//type assertion of the interface type list.Element any
+	diff := reference - value.Value.(int64)
+	//if the difference between the two is too great, return that they don't match
+	if diff > maxDiff || diff < -maxDiff {
+		println("Wrong Diff:", diff)
+		return false
+	}
+	println("Diff: %v", diff)
+	//return a match
+	return true
+}
+
+func blinky() {
+	println("ran blinky")
+	led := machine.LED
+	led.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	led.High()
+	time.Sleep(time.Second * 3)
+	for {
+		led.Low()
+		time.Sleep(time.Millisecond * 350)
+		led.High()
+		time.Sleep(time.Millisecond * 350)
+	}
 }
