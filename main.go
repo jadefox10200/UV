@@ -28,6 +28,7 @@ var qLenMax = 3
 //be connected to an encoder on the belt and we would adjust the duration based on the actual speed
 //of the belt. Maybe another day...
 var timerDuration time.Duration = 5
+var resetDuration time.Duration = 3
 
 // We want to capture if the sensor turns on or off in a single interrupt and so capture it as a toggle.
 const PinToggle = machine.PinRising | machine.PinFalling
@@ -159,9 +160,10 @@ func (q Queue) TimerFunc() {
 				println("Timer fired even though Q.Len() was 0. Should never happen!")
 			}
 			//q.Kill <- true
-		//A sheet was removed from the tunnel, so reset the timer.
+		//A sheet was removed from the tunnel, so reset the timer. Next sheet should be following
+		//so the resetDuration is shorter than the timerDuration.
 		case <-q.SheetRemovedChan:
-			q.Timer.Reset(timerDuration * time.Second)
+			q.Timer.Reset(resetDuration * time.Second)
 		//Stop the timer by use of a return and the defer will handle stopping
 		case <-q.StopTimerChan:
 			return
