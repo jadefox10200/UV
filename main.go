@@ -158,7 +158,7 @@ func (q Queue) TimerFunc() {
 			if q.Q.Len() == 0 {
 				println("Timer fired even though Q.Len() was 0. Should never happen!")
 			}
-			q.Kill <- true
+			//q.Kill <- true
 		//A sheet was removed from the tunnel, so reset the timer.
 		case <-q.SheetRemovedChan:
 			q.Timer.Reset(timerDuration * time.Second)
